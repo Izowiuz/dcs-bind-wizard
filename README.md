@@ -29,13 +29,18 @@ capture-driven TUI, pointed at DCS.
 ./dcs-bind-wizard.py                 # TUI wizard (auto-detects Steam paths)
 ./dcs-bind-wizard.py --game-dir ~/.local/share/Steam/steamapps/common/DCSWorld
 ./dcs-bind-wizard.py -g -a su-25T    # headless: (re)generate diff.lua files
+./dcs-bind-wizard.py -s -a su-25T    # sync: absorb changes made in DCS's UI
 ./dcs-bind-wizard.py --reset         # start from scratch
 ```
 
 Wizard state lives in `dcs-bind-wizard-results.json` next to the script and
-is saved after every change, so quitting at any time is safe. Tuning done
-in-game (curves, inversions) merges into the same diff files — regenerate
-only after updating the results file accordingly.
+is saved after every change, so quitting at any time is safe.
+
+After tuning things in the DCS UI (new binds, curves, inversions), run
+`--sync`: every entry the wizard can model becomes a regular binding, and
+the parsed files are kept as a snapshot that generation overlays — so
+nothing set in-game is ever lost, byte-for-byte (sync verifies the
+round-trip and reports OK/MISMATCH per device).
 
 ## Notes
 

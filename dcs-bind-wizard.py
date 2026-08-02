@@ -44,6 +44,7 @@ Usage:
 """
 
 import argparse
+import copy
 import curses
 import fcntl
 import glob
@@ -282,6 +283,23 @@ def build_sections(commands):
     return [(cat, by_cat[cat]) for cat in sorted(by_cat, key=order)]
 
 
+def _int_keys(v):
+    if isinstance(v, dict):
+        return {(int(k) if isinstance(k, str) and k.isdigit() else k):
+                _int_keys(x) for k, x in v.items()}
+    return v
+
+
+def parse_diff_lua(text):
+    """Parse a DCS diff.lua into a Python dict (the format is regular
+    enough for a regex translation to JSON)."""
+    body = text.split("local diff =", 1)[1].rsplit("return diff", 1)[0]
+    s = re.sub(r'\[\s*"((?:[^"\\]|\\.)*)"\s*\]\s*=', r'"\1":', body)
+    s = re.sub(r"\[(\d+)\]\s*=", r'"\1":', s)
+    s = re.sub(r",(\s*[}\]])", r"\1", s)
+    return _int_keys(json.loads(s.strip()))
+
+
 def dcs_device_ids(saved_games):
     """DCS short device name -> 'Name {GUID}' full id (diff.lua file stem).
 
@@ -370,16 +388,15 @@ def device_axis_keys(info):
     return {ABS_TO_DCS[c] for c in info["axmap"] if c in ABS_TO_DCS}
 
 
-def generate(results, cfg, aircraft):
-    """Build and install the per-device diff.lua files. Returns summary."""
-    if dcs_running():
-        raise RuntimeError("DCS is running — quit the game first "
-                           "(it overwrites Config/Input on exit)")
-    bindings = {h: r for h, r in results.get("aircraft", {})
-                .get(aircraft, {}).items() if r}
-    if not bindings:
+def build_diffs(results, aircraft, devs):
+    """Modeled bindings overlaid on the last --sync snapshot (if any).
+
+    Returns {role: {'axisDiffs': ..., 'keyDiffs': ...}}."""
+    ac = results.get("aircraft", {}).get(aircraft, {})
+    bindings = {h: r for h, r in ac.items()
+                if r and not h.startswith("_")}
+    if not bindings and not ac.get("_snapshot"):
         raise RuntimeError("nothing bound for %s yet" % aircraft)
-    devs = resolve_devices(results)
     diffs = {role: {"axisDiffs": {}, "keyDiffs": {}} for role in devs}
 
     def other(role):
@@ -427,23 +444,114 @@ def generate(results, cfg, aircraft):
                 h: e for h, e in diffs[role][table].items()
                 if set(e) - {"name"}}
 
-    out_dir = os.path.join(cfg["saved_games"], "Config", "Input",
-                           aircraft, "joystick")
+    # overlay onto the snapshot of the installed state (--sync), so
+    # bindings made in the DCS UI survive regeneration
+    snapshot = ac.get("_snapshot") or {}
+    for role in diffs:
+        if role not in snapshot:
+            continue
+        merged = copy.deepcopy(snapshot[role])
+        for table in ("axisDiffs", "keyDiffs"):
+            merged.setdefault(table, {})
+            merged[table].update(diffs[role][table])
+        diffs[role] = merged
+    return diffs
+
+
+def render_diff(diff):
+    """diff dict -> file content, byte-compatible with DCS's serializer
+    (sorted keys, tab indent, no trailing newline)."""
+    body = lua({"axisDiffs": diff.get("axisDiffs", {}),
+                "keyDiffs": diff.get("keyDiffs", {})}, 1)
+    return "local diff = %s\nreturn diff" % body
+
+
+def joystick_dir(cfg, aircraft):
+    return os.path.join(cfg["saved_games"], "Config", "Input",
+                        aircraft, "joystick")
+
+
+def generate(results, cfg, aircraft):
+    """Build and install the per-device diff.lua files. Returns summary."""
+    if dcs_running():
+        raise RuntimeError("DCS is running — quit the game first "
+                           "(it overwrites Config/Input on exit)")
+    devs = resolve_devices(results)
+    diffs = build_diffs(results, aircraft, devs)
+    out_dir = joystick_dir(cfg, aircraft)
     os.makedirs(out_dir, exist_ok=True)
     lines = []
     for role, info in devs.items():
         path = os.path.join(out_dir, info["dcs_id"] + ".diff.lua")
         if os.path.exists(path):
             shutil.copy2(path, path + ".bak")
-        body = lua({"axisDiffs": diffs[role]["axisDiffs"],
-                    "keyDiffs": diffs[role]["keyDiffs"]}, 1)
-        # no trailing newline: byte-compatible with DCS's own serializer
         with open(path, "w", encoding="utf-8") as f:
-            f.write("local diff = %s\nreturn diff" % body)
+            f.write(render_diff(diffs[role]))
         n = (len(diffs[role]["axisDiffs"]) + len(diffs[role]["keyDiffs"]))
         lines.append("%s: %d entries -> %s" % (role, n, path))
     lines.append("backups: *.bak next to each file (when one existed)")
     lines.append("Start DCS and check Options -> Controls -> %s" % aircraft)
+    return lines
+
+
+def sync(results, cfg, aircraft):
+    """Import the installed diff.lua files back into the results file.
+
+    Every entry the wizard can model becomes a normal binding (so the TUI
+    shows it); the full parsed files are kept as a snapshot that
+    build_diffs() overlays, so nothing tuned in the DCS UI is ever lost.
+    Safe to run while DCS is running (read-only on game files).
+    """
+    devs = resolve_devices(results)
+    out_dir = joystick_dir(cfg, aircraft)
+    new = {}
+    snapshot = {}
+    lines = []
+    for role, info in devs.items():
+        path = os.path.join(out_dir, info["dcs_id"] + ".diff.lua")
+        if not os.path.exists(path):
+            lines.append("%s: no installed diff.lua — skipped" % role)
+            continue
+        parsed = parse_diff_lua(open(path, encoding="utf-8").read())
+        snapshot[role] = parsed
+        rev = {ABS_TO_DCS[c]: i for i, c in enumerate(info["axmap"])
+               if c in ABS_TO_DCS}
+        n = 0
+        for table, kind in (("axisDiffs", "axis"), ("keyDiffs", "button")):
+            for h, e in parsed.get(table, {}).items():
+                items = e.get("added") or e.get("changed") or {}
+                first = items.get(1) if isinstance(items, dict) else None
+                key = (first or {}).get("key")
+                if not key:
+                    continue
+                name = e.get("name", h)
+                if kind == "axis":
+                    if key not in rev:
+                        continue
+                    new[h] = {"name": name, "role": role, "type": "axis",
+                              "index": rev[key],
+                              "invert": bool((first.get("filter") or {})
+                                             .get("invert"))}
+                else:
+                    m = re.match(r"JOY_BTN(\d+)$", key)
+                    if not m:
+                        continue          # keyboard-style combos stay
+                    new[h] = {"name": name, "role": role, "type": "button",
+                              "index": int(m.group(1)) - 1}
+                n += 1
+        lines.append("%s: %d bindings imported" % (role, n))
+    results.setdefault("aircraft", {})[aircraft] = new
+    new["_snapshot"] = snapshot
+
+    # round-trip check: regenerating now must reproduce the files exactly
+    diffs = build_diffs(results, aircraft, devs)
+    for role, info in devs.items():
+        if role not in snapshot:
+            continue
+        path = os.path.join(out_dir, info["dcs_id"] + ".diff.lua")
+        same = render_diff(diffs[role]) == open(path, encoding="utf-8").read()
+        lines.append("%s: round-trip %s" % (role,
+                                            "OK" if same else "MISMATCH!"))
     return lines
 
 
@@ -757,9 +865,11 @@ def run_table(tui, devices, results, bindings, used, sections, path,
             status = []
         elif k in ("x", "X"):
             _, h_, name, _ = rows[sel]
-            if h_ in bindings:
-                del bindings[h_]
-                save(results, path)
+            bindings.pop(h_, None)
+            for snap in (bindings.get("_snapshot") or {}).values():
+                for table in ("axisDiffs", "keyDiffs"):
+                    snap.get(table, {}).pop(h_, None)
+            save(results, path)
             status = ["%s: cleared (DCS default, if any, comes back)" % name]
         elif k in ("i", "I"):
             _, h_, name, _ = rows[sel]
@@ -871,7 +981,8 @@ def tui_main(scr, args, results, cfg):
                                     aircraft_all[aircraft]["factory_dir"])
         sections = build_sections(commands)
         bindings = results.setdefault("aircraft", {}).setdefault(aircraft, {})
-        bindings_clean = {h: r for h, r in bindings.items() if r}
+        bindings_clean = {h: r for h, r in bindings.items()
+                          if r and not h.startswith("_")}
         display = aircraft_all[aircraft]["display"]
 
         used = {}
@@ -929,6 +1040,10 @@ def main():
                     help="delete the results file and start from scratch")
     ap.add_argument("-g", "--generate", action="store_true",
                     help="generate the diff.lua files and exit")
+    ap.add_argument("-s", "--sync", action="store_true",
+                    help="import the installed diff.lua files into the "
+                         "results file (absorbs changes made in the DCS "
+                         "UI) and exit")
     ap.add_argument("-a", "--aircraft", default=None,
                     help="aircraft key for --generate (e.g. su-25T); "
                          "defaults to the one last used in the TUI")
@@ -949,14 +1064,20 @@ def main():
             results = json.load(f)
     cfg = resolve_config(args, dict(results.get("_config", {})))
 
-    if args.generate:
+    if args.generate or args.sync:
         aircraft = args.aircraft or cfg.get("aircraft")
         if not aircraft:
             sys.exit("Pass --aircraft (e.g. -a su-25T).")
         try:
-            for line in generate(results, cfg, aircraft):
+            if args.sync:
+                lines = sync(results, cfg, aircraft)
+                results["_config"] = cfg
+                save(results, args.results)
+            else:
+                lines = generate(results, cfg, aircraft)
+            for line in lines:
                 print(line)
-        except (RuntimeError, OSError) as e:
+        except (RuntimeError, OSError, ValueError) as e:
             sys.exit("ERROR: %s" % e)
         return
 
