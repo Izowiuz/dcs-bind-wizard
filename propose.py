@@ -24,10 +24,12 @@ disagree with -- this only means you confirm rather than invent.
 
 import argparse
 import collections
+import datetime
 import importlib.util
 import json
 import os
 import re
+import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -103,11 +105,34 @@ def wants(cmd, g):
     where = g.get('where') or ''
     dev = ('stick' if 'STICK' in where else
            'throttle' if 'THROTTLE' in where else None)
+    urgency = URGENCY.get(g.get('theme'), 3)
+    if GRIP_PROSE.search(place):
+        urgency = 0
     # "on the throttle" is where it lives on the real jet, not a claim that you
     # must reach it mid-manoeuvre; only fingers and the grip mean that
-    reflex = bool(re.search(r'\bgrip\b|thumb|finger|trigger|paddle|slew',
-                            place))
-    return shape, dev, reflex
+    # The prose says where a control sits on the real jet; the theme says
+    # whether you touch it with a MiG on your tail. Lights are a fingertip
+    # switch on the throttle and still have no business on a thumb hat.
+    return shape, dev, urgency
+
+
+def _drop_combined(members, cmds):
+    """A switch family often ships its positions AND a command that does both:
+    `- UP`, `- DOWN` and `- UP/DOWN`. Binding the pair makes the combined one
+    redundant, and it would eat a third slot on a two-position switch.
+    """
+    tails = {}
+    for h in members:
+        name = cmds[h]['name']
+        tail = name.rsplit(' - ', 1)[-1] if ' - ' in name else name
+        tails[tail.strip().lower()] = h
+    drop = set()
+    for tail, h in tails.items():
+        if '/' in tail:
+            parts = [p.strip() for p in tail.split('/')]
+            if all(p in tails for p in parts):
+                drop.add(h)
+    return [h for h in members if h not in drop] or members
 
 
 def families(cmds, guide, chosen):
@@ -120,28 +145,53 @@ def families(cmds, guide, chosen):
     for h in chosen:
         c = cmds[h]
         fam = c.get('family')
-        shape, dev, reflex = wants(c, guide[h])
+        shape, dev, urgency = wants(c, guide[h])
         if shape is None:
             continue
-        if fam and (c.get('ways') or 0) > 1 and shape in ('hat4', 'hat2'):
+        # Siblings of one physical switch belong together whatever shape they
+        # were classified as. Left and right engine cutoff are a pair: split
+        # across two devices they are worse than anywhere together, because
+        # your hand has to learn two places for one idea.
+        if fam and (c.get('ways') or 0) > 1 and shape in ('hat4', 'hat2',
+                                                          'button'):
             key = (fam, shape)
             groups.setdefault(key, {'shape': shape, 'dev': dev,
-                                    'reflex': reflex, 'members': [],
+                                    'urgency': urgency, 'members': [],
                                     'votes': 0})
             g = groups[key]
             g['members'].append(h)
             g['votes'] = max(g['votes'], c['votes'])
         else:
-            singles.append((h, shape, dev, reflex, c['votes']))
+            singles.append((h, shape, dev, urgency, c['votes']))
+    def label_for(fam, members):
+        """`switch_family` strips the direction words, which sometimes leaves
+        nothing useful: the engine cutoff pair comes out called "throttle".
+        The names themselves read better."""
+        names = [cmds[h]['name'] for h in members]
+        head = names[0]
+        for n in names[1:]:
+            i = 0
+            while i < min(len(head), len(n)) and head[i] == n[i]:
+                i += 1
+            head = head[:i]
+        head = head.rstrip(' -(,')
+        return head if len(head) >= 4 else fam
+
     out = []
     for (fam, shape), g in groups.items():
+        members = _drop_combined(g['members'], cmds)
+        fam = label_for(fam, members)
+        if shape == 'button' and len(members) > 1:
+            # a pair of buttons that are one switch wants one switch
+            shape = 'hat2' if len(members) == 2 else 'hat4'
         out.append({'what': fam, 'shape': shape, 'dev': g['dev'],
-                    'reflex': g['reflex'], 'members': g['members'],
+                    'urgency': g['urgency'], 'members': members,
                     'votes': g['votes']})
-    for h, shape, dev, reflex, votes in singles:
+    for h, shape, dev, urgency, votes in singles:
         out.append({'what': cmds[h]['name'], 'shape': shape, 'dev': dev,
-                    'reflex': reflex, 'members': [h], 'votes': votes})
-    out.sort(key=lambda x: -x['votes'])
+                    'urgency': urgency, 'members': [h], 'votes': votes})
+    # most urgent first, and only then by how many factory profiles agree
+    out.sort(key=lambda x: (x['urgency'], -x['votes']))
     return out
 
 
@@ -193,8 +243,10 @@ def stage_of(cmd):
     return None
 
 
-def lay_out(module, ctrl, members, cmds, press_only=False):
+def lay_out(module, ctrl, members, cmds, press_only=False, borrowed=None):
     """hash -> button, respecting which way each one points."""
+    if borrowed is not None and len(members) == 1:
+        return {members[0]: borrowed}
     if press_only and ctrl.push is not None and len(members) == 1:
         return {members[0]: ctrl.push}
     out, left = {}, []
@@ -260,26 +312,92 @@ def resolve_axis(devs, need, cmds):
                           if a.safe_for_absolute])
     if 'zoom' in low:
         return ('throttle', [a for a in devs['throttle'].axes(kind='dial')])
+    # a warbird flies on three levers: throttle, propeller RPM, mixture
+    if re.search(r'\brpm\b|prop(eller)? pitch|mixture|supercharger', low):
+        spare = [a for a in devs['throttle'].axes()
+                 if a.kind in ('lever', 'slider', 'dial')
+                 and 'throttle lever' not in (a.label or '').lower()]
+        # steadiest first: something that stays where you leave it
+        spare.sort(key=lambda a: (a.kind != 'lever', a.index))
+        return ('throttle', spare[:1])
     return (None, [])
 
 
+#: WHEN you touch a command, from the module's own theme. This is the thing
+#: that decides how good a home it deserves -- and the wizard already works it
+#: out. The first version read the word "finger" out of a sentence describing
+#: where a switch sits on the real jet, which is a different question, and
+#: every fix to it moved the symptom somewhere else.
+URGENCY = {'fight': 0, 'fly': 0,        # in a turn
+           'land': 1,                   # on approach, hands busy but there is time
+           'sensors': 2,                # in the air
+           'cockpit': 3, 'other': 3}    # on the ramp
+
+#: how precious a control is, from the map's own words
+REACH_TIER = [('thumb', 0), ('index finger', 0),
+              ('without releasing', 1),
+              ('needs letting go', 3)]
+
+#: the worst reach an urgency can live with...
+MAX_REACH = {0: 1, 1: 3, 2: 1, 3: 3}
+#: ...and the best it may take. Without a floor, something you do on the ramp
+#: grabs a pinky lever the moment the panel buttons run out, and the fallback
+#: pass -- which can see spare positions on idle rockers -- never gets a look.
+MIN_REACH = {0: 0, 1: 0, 2: 0, 3: 2}
+
+
+#: When the module says a command sits ON THE GRIP, the aircraft's own
+#: designers already answered this question -- your hand is there anyway. That
+#: beats the theme, which only says when you touch it.
+#:
+#: Deliberately narrow: "a fingertip switch on the throttle" describes the
+#: throttle body, not the grip, and exterior lights have no business on a thumb
+#: hat however fingertip-operated they are.
+GRIP_PROSE = re.compile(
+    r'on the grip|under your thumb|front of the grip|top of the grip'
+    r'|behind the grip|the grip in the real jet', re.I)
+
+
+def reach_tier(ctrl):
+    for word, tier in REACH_TIER:
+        if word in (ctrl.reach or ''):
+            return tier
+    return 2                             # unknown: somewhere in between
+
+
+#: what may stand in for what, when the exact shape is gone or too small
+FITS = {
+    'hat2': ('hat2', 'switch2', 'switch3', 'hat4', 'selector'),
+    'hat4': ('hat4', 'hat8', 'selector'),
+    'button': ('button', 'paddle'),
+    'paddle': ('paddle', 'button'),
+    'trigger': ('trigger',),
+    'ministick': ('ministick',),
+    'dial': ('dial', 'encoder'),
+}
+
+
 def score(ctrl, need, role):
-    if ctrl.kind != need['shape']:
-        if not (need['shape'] == 'hat2' and ctrl.kind == 'switch2'):
-            return None
+    ok = FITS.get(need['shape'], (need['shape'],))
+    if ctrl.kind not in ok:
+        return None
     if len(ctrl.bindable_buttons) < len(need['members']):
         return None
-    regrip = ctrl.reach == 'needs letting go'
-    if need['reflex'] and regrip:
-        return None
-    s = 100
+    tier = reach_tier(ctrl)
+    if not (MIN_REACH[need['urgency']] <= tier <= MAX_REACH[need['urgency']]):
+        return None                      # wrong kind of home for this
+    # Take the LEAST precious control that still does the job. Needs are placed
+    # most-urgent first, so the thumb positions are already spoken for by the
+    # time anything from the ramp gets a look -- and it has no reason to want
+    # one anyway.
+    s = 100 + 12 * tier
     if need['dev'] == role:
         s += 40
     elif need['dev'] and need['dev'] != role:
         s -= 50
-    if not regrip:
-        s += 15
-    s -= 3 * (len(ctrl.bindable_buttons) - len(need['members']))
+    if ctrl.kind == need['shape']:
+        s += 20                          # the shape it actually asked for
+    s -= 4 * (len(ctrl.bindable_buttons) - len(need['members']))
     return s
 
 
@@ -320,8 +438,40 @@ def place(module, cmds, guide, chosen):
     pool = [(role, c) for role, d in devs.items()
             for c in d.groups(bindable=True)]
     taken, out, unplaced = set(), [], []
+    needs = families(cmds, guide, chosen)
 
-    for need in families(cmds, guide, chosen):
+    # A trigger has stages and more than one command wants it: on the Su-25T
+    # the cannon and the selected weapon both belong there, lighter pull first.
+    # Letting the first comer take the whole control put the jet's main fire
+    # command on a hat direction.
+    trigger_needs = [n for n in needs if n['shape'] == 'trigger'
+                     and len(n['members']) == 1]
+    if len(trigger_needs) > 1:
+        spot = next(((i, r, c) for i, (r, c) in enumerate(pool)
+                     if c.kind == 'trigger'), None)
+        if spot:
+            i, role, ctrl = spot
+            taken.add(i)
+            free = list(ctrl.buttons)
+            named, rest = {}, []
+            for n in trigger_needs:
+                st = stage_of(cmds[n['members'][0]])
+                if st is not None and st < len(free) and free[st] not in named:
+                    named[free[st]] = n
+                else:
+                    rest.append(n)
+            rest.sort(key=lambda n: -n['votes'])
+            for n in rest:
+                spare = [b for b in free if b not in named]
+                if not spare:
+                    break
+                named[spare[0]] = n
+            for b, n in named.items():
+                n['borrowed'] = b
+                out.append((n, (role, ctrl), 200))
+                needs.remove(n)
+
+    for need in needs:
         if need['shape'] == 'axis':
             out.append((need, resolve_axis(devs, need, cmds), None))
             continue
@@ -352,31 +502,42 @@ def place(module, cmds, guide, chosen):
         role, ctrl = p
         for b in lay_out(module, ctrl, n['members'], cmds,
                          press_only=len(n['members']) == 1
-                         and len(ctrl.bindable_buttons) > 1).values():
+                         and len(ctrl.bindable_buttons) > 1,
+                         borrowed=n.get('borrowed')).values():
             occupied.add((role, b))
     still = []
-    for need in sorted(unplaced, key=lambda n: -n['votes']):
-        if len(need['members']) != 1 or need['shape'] not in ('button', 'hat2'):
+    for need in sorted(unplaced, key=lambda n: (n['urgency'], -n['votes'])):
+        if len(need['members']) != 1:
             still.append(need)
             continue
-        best, best_s = None, None
+        best, best_s, best_btn = None, None, None
         for i, (role, c) in enumerate(pool):
-            if c.push is None or (role, c.push) in occupied:
+            # a trigger's stages are the gun, and a selector's positions are one
+            # switch: their spare capacity is not spare
+            if c.kind in ('trigger', 'selector'):
                 continue
-            regrip = c.reach == 'needs letting go'
-            if need['reflex'] and regrip:
+            tier = reach_tier(c)
+            if not (MIN_REACH[need['urgency']] <= tier
+                    <= MAX_REACH[need['urgency']]):
                 continue
-            sc = 60 + (30 if need['dev'] == role else 0)
-            # borrowing is for leftovers: a control you must let go to reach is
-            # the RIGHT home for a cold-start switch, and keeps the thumb spots
-            # free for things you need in the air
-            sc += 25 if (regrip and not need['reflex']) else 0
+            # a press nobody claimed, or a spare position on a control that
+            # nothing took at all -- four idle two-way rockers should not sit
+            # there while a cold-start switch goes homeless
+            spare = [b for b in c.bindable_buttons if (role, b) not in occupied]
+            if not spare:
+                continue
+            btn = c.push if (c.push is not None
+                             and (role, c.push) not in occupied) else spare[0]
+            whole = i not in taken
+            sc = 60 + 12 * tier + (30 if need['dev'] == role else 0)
+            sc -= 15 if whole else 0     # prefer borrowing over opening a new one
             if best_s is None or sc > best_s:
-                best, best_s = (role, c), sc
+                best, best_s, best_btn = (role, c), sc, btn
         if best is None:
             still.append(need)
             continue
-        occupied.add((best[0], best[1].push))
+        occupied.add((best[0], best_btn))
+        need['borrowed'] = best_btn
         out.append((need, best, best_s))
     return out, still
 
@@ -419,7 +580,8 @@ def seed(module, cmds, guide, chosen=None):
         ctrl = what
         spots = lay_out(module, ctrl, need['members'], cmds,
                         press_only=len(need['members']) == 1
-                        and len(ctrl.bindable_buttons) > 1)
+                        and len(ctrl.bindable_buttons) > 1,
+                        borrowed=need.get('borrowed'))
         for h, b in spots.items():
             recs[h] = {'name': cmds[h]['name'], 'role': role,
                        'type': 'button', 'index': b, 'proposed': True}
@@ -565,6 +727,91 @@ def write_html(module, key, cmds, guide, path):
     return path, n
 
 
+def reseed(module, key, cmds, guide):
+    """Throw an aircraft's bindings away and lay it out fresh.
+
+    A results file that has been through several device configurations and two
+    generations of this matcher is sediment: an old capture numbered against
+    hardware that has since been reconfigured, a combined Thrust axis left
+    beside the split pair that replaced it, an inversion nobody meant. Patching
+    those one at a time is slower and less certain than starting over, because
+    everything the proposal knows is now better than what is there.
+
+    Everything comes out marked `proposed`, so the wizard still asks you to
+    confirm it -- this replaces the guesses, not your judgement.
+    """
+    path = results_path()
+    data = json.load(open(path))
+    stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = f'{path}.bak.{stamp}'
+    shutil.copy2(path, backup)
+
+    before = len(data['aircraft'].get(key, {}))
+    recs = seed(module, cmds, guide)
+    data.setdefault('aircraft', {})[key] = recs
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    return backup, before, len(recs)
+
+
+def audit(module, key, cmds, guide):
+    """Bindings that no longer match the hardware.
+
+    An old capture is numbered against the device as it was configured then.
+    Reconfigure a VIRPIL and the numbers stay put while the buttons move, so a
+    binding can end up on a control that does something else -- or on one the
+    firmware reports with nothing behind it.
+    """
+    binds = json.load(open(results_path()))['aircraft'].get(key, {})
+    devs = {d.kind: d for d in devicemap.load_all()}
+    out = []
+
+    # two commands on one axis is nearly always a leftover: they drive the same
+    # surface from the same lever and fight over it
+    by_axis = {}
+    for h, r in binds.items():
+        if isinstance(r, dict) and r.get('type') == 'axis':
+            by_axis.setdefault((r['role'], r['index']), []).append(r)
+    for (role, idx), rs in by_axis.items():
+        if len(rs) > 1:
+            others = ', '.join(x['name'] for x in rs[1:])
+            out.append((rs[0]['name'], rs[0],
+                        f'shares this axis with {others}'))
+        # the same lever cannot need inverting for one command and not another
+        if len({bool(x.get('invert')) for x in rs}) > 1:
+            out.append((rs[0]['name'], rs[0],
+                        'inverted for some commands on this axis, not others'))
+
+    for h, r in binds.items():
+        if not isinstance(r, dict) or 'role' not in r:
+            continue
+        d = devs.get(r['role'])
+        if not d:
+            continue
+        if r['type'] == 'axis':
+            if d.axis(r['index']) is None:
+                out.append((r['name'], r, 'no such axis on this device'))
+            continue
+        g = d.group_of(r['index'])
+        if g is None:
+            out.append((r['name'], r, 'no such button'))
+        elif not g.bindable:
+            out.append((r['name'], r,
+                        f'{g.kind} — {g.label}: nothing is behind it'))
+        elif h in cmds:
+            shape, _dev, _urg = wants(cmds[h], guide.get(h, {}))
+            if shape and shape != 'axis' and g.kind != shape:
+                # a hat direction is a fine home for a plain button; the other
+                # way round is what is worth saying
+                if shape in ('paddle', 'trigger', 'ministick'):
+                    out.append((r['name'], r,
+                                f'wants a {shape}, sits on {g.kind} '
+                                f'"{g.label}"'
+                                + (f' [{g.direction(r["index"])}]'
+                                   if g.direction(r['index']) else '')))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('-a', '--aircraft', default='FA-18C')
@@ -574,11 +821,56 @@ def main():
                     help='write KNEEBOARD-<module>.md from what is bound')
     ap.add_argument('--html', nargs='?', const='', metavar='PATH',
                     help='the same, laid out in columns for a second screen')
+    ap.add_argument('--reseed', action='store_true',
+                    help='throw this module\'s bindings away and lay it out '
+                         'fresh (backs the results file up first)')
+    ap.add_argument('--audit', action='store_true',
+                    help='bindings that no longer match the hardware')
     ap.add_argument('--check', action='store_true',
                     help='compare against dcs-bind-wizard-results.json')
     args = ap.parse_args()
 
     module = wizard()
+
+    if args.reseed:
+        cfg = load_cfg(module, args.game_dir)
+        ac = module.discover_aircraft(cfg)
+        keys = [args.aircraft] if args.aircraft else list(ac)
+        for k in keys:
+            if k not in ac:
+                sys.exit(f'no such module: {k} (have {", ".join(ac)})')
+        first = True
+        for k in keys:
+            cmds = module.harvest_commands(cfg, k, ac[k]['factory_dir'])
+            guide = module.build_guide(cmds)
+            backup, before, after = reseed(module, k, cmds, guide)
+            if first:
+                print(f'  backed up to {os.path.basename(backup)}')
+                first = False
+            print(f'  {k:9s} {before} bindings -> {after}, all marked ?')
+        print('  open the wizard and walk the list: c confirms one, C the '
+              'section')
+        return
+
+    if args.audit:
+        cfg = load_cfg(module, args.game_dir)
+        ac = module.discover_aircraft(cfg)
+        bad = []
+        keys = [args.aircraft] if args.aircraft else list(ac)
+        for k in keys:
+            if k not in ac:
+                continue
+            cmds = module.harvest_commands(cfg, k, ac[k]['factory_dir'])
+            guide = module.build_guide(cmds)
+            for name, r, why in audit(module, k, cmds, guide):
+                bad.append((k, name, r, why))
+        for k, name, r, why in bad:
+            where = (f'{r["role"]} BTN{r["index"] + 1}'
+                     if r['type'] == 'button'
+                     else f'{r["role"]} axis {r["index"]}')
+            print(f'  {k:8s} {name[:44]:46s} {where:16s} {why}')
+        print(f'\n  {len(bad)} binding(s) worth a second look')
+        return
 
     if args.sheet is not None or args.html is not None:
         cfg = load_cfg(module, args.game_dir)
@@ -623,7 +915,8 @@ def main():
         print(f'  {need["what"][:38]:40s} {role:8s} {c.kind:9s} {c.label}')
         spots = lay_out(module, c, need['members'], cmds,
                         press_only=len(need['members']) == 1
-                        and len(c.bindable_buttons) > 1)
+                        and len(c.bindable_buttons) > 1,
+                        borrowed=need.get('borrowed'))
         for h in need['members']:
             b = spots.get(h)
             where = c.direction(b) if b is not None else '?'
@@ -632,7 +925,8 @@ def main():
         if args.why:
             print(f'      wants {need["shape"]}'
                   + (f', {need["dev"]}' if need['dev'] else '')
-                  + (', in flight' if need['reflex'] else '')
+                  + f", {['in a turn', 'on approach', 'in the air',
+                            'on the ramp'][need['urgency']]}"
                   + f'   {need["votes"]} factory profiles   score {s}')
             print(f'      {guide[need["members"][0]]["place"][:74]}')
         print()

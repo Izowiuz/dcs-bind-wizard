@@ -71,6 +71,10 @@ Then "Generate diff.lua files". Afterwards:
 ./propose.py -a FA-18C --sheet --html   # KNEEBOARD-FA-18C.md + the columns page
 ./propose.py -a FA-18C --why            # why each control was chosen
 ./propose.py -a FA-18C --check          # the proposal against what you bound
+./propose.py -a FA-18C --audit          # bindings that no longer fit the hardware
+./propose.py -a '' --audit              # ...across every module
+./propose.py -a FA-18C --reseed         # throw it away and lay it out fresh
+./propose.py -a '' --reseed             # ...every module, one backup
 ```
 
 `P` needs [`sim-device-map`](../sim-device-map) cloned next to this repo, or
