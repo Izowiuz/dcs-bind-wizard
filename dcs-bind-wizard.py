@@ -1517,14 +1517,15 @@ def resolve_config(args, cfg):
 def describe(results, r):
     if not r:
         return "(unset)"
+    mark = "? " if r.get("proposed") else ""
     if r["type"] == "button":
-        return "%s BTN%d" % (r["role"], r["index"] + 1)
+        return "%s%s BTN%d" % (mark, r["role"], r["index"] + 1)
     axmap = results.get("_devices", {}).get(r["role"], {}).get("axmap")
     key = ""
     if axmap and r["index"] < len(axmap) and axmap[r["index"]] in ABS_TO_DCS:
         key = " " + ABS_TO_DCS[axmap[r["index"]]]
-    return "%s axis %d%s%s" % (r["role"], r["index"], key,
-                               " (inverted)" if r.get("invert") else "")
+    return "%s%s axis %d%s%s" % (mark, r["role"], r["index"], key,
+                                 " (inverted)" if r.get("invert") else "")
 
 
 def save(results, path):
@@ -1549,8 +1550,50 @@ def progress_label(title, bound, total):
     return "%s  [%d/%d]" % (title, bound, total)
 
 
+def propose_into(bindings, results, path, commands, guide, used, tui):
+    """Fill every unbound command from the hardware map.
+
+    propose.py knows the shape of each control on the devices -- which buttons
+    are one hat, which trigger stages are cumulative, what a little finger
+    reaches -- and the module already says what each command wants. Seeding
+    turns this screen from twenty-six presses into twenty-six confirmations.
+    Anything already bound is left alone, and a proposal is marked `?` until
+    you press a button over it.
+    """
+    if commands is None:
+        return "propose: no commands loaded"
+    try:
+        import importlib.util
+        import sys as _sys
+        spec = importlib.util.spec_from_file_location(
+            "dcspropose", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "propose.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        recs = mod.seed(_sys.modules[__name__], commands, guide)
+    except SystemExit as e:
+        return "propose: %s" % e
+    except Exception as e:
+        return "propose: %s (is ../sim-device-map there?)" % e
+
+    added = 0
+    for h, r in recs.items():
+        if h in bindings:
+            continue                      # never overwrite what you chose
+        key = (r["role"], r["type"], r["index"])
+        if r["type"] == "button" and key in used:
+            continue                      # that button already carries something
+        bindings[h] = r
+        used.setdefault(key, r["name"])
+        added += 1
+    save(results, path)
+    return ("proposed %d binding%s from the device map — marked ?, press a "
+            "button over any you disagree with" % (added, "" if added == 1
+                                                   else "s"))
+
+
 def run_table(tui, devices, results, bindings, used, sections, path,
-              heading, guide=None):
+              heading, guide=None, commands=None):
     """Arrow-key table over all commands of the given sections."""
     rows = []                             # ("header", ...) / ("item", ...)
     for sec_title, items in sections:
@@ -1601,8 +1644,9 @@ def run_table(tui, devices, results, bindings, used, sections, path,
                                   g.get("where", "")]):
             tui._put(h - 5 + j, 0, line)
         tui._put(h - 2, 0, status)          # prompt / result of the last key
-        tui._put(h - 1, 0, "arrows = move, RETURN = bind, I = invert, "
-                           "X = clear, ESC = back")
+        tui._put(h - 1, 0, "arrows = move, RETURN = bind, P = propose, "
+                           "c/C = confirm one/all, I = invert, X = clear, "
+                           "ESC = back")
         tui.scr.refresh()
 
     status = ""
@@ -1619,6 +1663,35 @@ def run_table(tui, devices, results, bindings, used, sections, path,
         elif k == "down":
             move(+1)
             status = ""
+        elif k in ("p", "P"):
+            status = propose_into(bindings, results, path, commands, guide,
+                                  used, tui)
+        elif k == "c":
+            # accepting a proposal is a decision, not a capture: pressing the
+            # button again just to agree with it would be the whole point lost
+            _, h_, name, _ = rows[sel]
+            r = bindings.get(h_)
+            if not r:
+                status = "%s: nothing to confirm" % name
+            elif not r.get("proposed"):
+                status = "%s: already yours" % name
+            else:
+                r.pop("proposed")
+                save(results, path)
+                status = "%s: confirmed — %s" % (name, describe(results, r))
+                move(+1)
+        elif k == "C":
+            n = 0
+            for _what, h_, _n, _k in [r for r in rows if r[0] == "item"]:
+                r = bindings.get(h_)
+                if r and r.get("proposed"):
+                    r.pop("proposed")
+                    n += 1
+            if n:
+                save(results, path)
+            status = ("confirmed %d proposal%s in this section"
+                      % (n, "" if n == 1 else "s")) if n else \
+                     "nothing left to confirm here"
         elif k in ("x", "X"):
             _, h_, name, _ = rows[sel]
             bindings.pop(h_, None)
@@ -1675,7 +1748,7 @@ def run_table(tui, devices, results, bindings, used, sections, path,
                 if accept:
                     used[key_] = name
                     r = {"name": name, "role": d.role, "type": etype,
-                         "index": number}
+                         "index": number}      # no `proposed`: you pressed it
                     if etype == "axis":
                         r["invert"] = invert
                     bindings[h_] = r
@@ -1764,7 +1837,7 @@ def tui_main(scr, args, results, cfg):
         if choice == 0:
             run_table(tui, active, results, bindings, used, ess_sections,
                       args.results, "%s — essential binds" % display,
-                      guide=guide)
+                      guide=guide, commands=commands)
             continue
         if choice == 2:
             tui.page("Generate — %s" % display)
@@ -1789,7 +1862,7 @@ def tui_main(scr, args, results, cfg):
             heading = "%s — %s" % (display, "all sections" if sc == 0
                                    else chosen[0][0])
             run_table(tui, active, results, bindings, used, chosen,
-                      args.results, heading, guide=guide)
+                      args.results, heading, guide=guide, commands=commands)
 
 
 # -------------------------------------------------------------------- main --

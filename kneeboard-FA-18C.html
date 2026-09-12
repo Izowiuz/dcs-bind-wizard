@@ -1,0 +1,125 @@
+<title>Kneeboard DCS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+
+<style>
+  :root {
+    --paper:#e7ebed; --panel:#fbfcfc; --sunk:#dfe4e7; --ink:#14181b;
+    --muted:#566268; --faint:#8a949a; --rule:#ccd4d8; --rule-hi:#aab5bb;
+    --air:#0f5d75; --air-bg:#dfecf1; --heli:#8a5716; --heli-bg:#f2e8d6;
+    --f-disp:"Barlow Condensed","Helvetica Neue",Arial,sans-serif;
+    --f-body:"Barlow","Helvetica Neue",Arial,sans-serif;
+    --f-mono:"IBM Plex Mono",ui-monospace,"DejaVu Sans Mono",monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:#0f1316; --panel:#171d21; --sunk:#121719; --ink:#e3e9ec;
+      --muted:#9aa6ac; --faint:#6b777d; --rule:#293237; --rule-hi:#3c474d;
+      --air:#6cbdd4; --air-bg:#12303a; --heli:#d9a25b; --heli-bg:#33260f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#0f1316; --panel:#171d21; --sunk:#121719; --ink:#e3e9ec;
+    --muted:#9aa6ac; --faint:#6b777d; --rule:#293237; --rule-hi:#3c474d;
+    --air:#6cbdd4; --air-bg:#12303a; --heli:#d9a25b; --heli-bg:#33260f;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--f-body); font-size: 13px; line-height: 1.3; margin: 0;
+  }
+  .sheet {
+    max-width: 1500px; margin-inline: auto;
+    padding-inline: 18px; padding-block: 18px 28px;
+  }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;
+           border-bottom: 2px solid var(--rule-hi); padding-bottom: 10px; }
+  h1 { font-family: var(--f-disp); font-weight: 700; font-size: 26px;
+       letter-spacing: .02em; text-transform: uppercase; margin: 0; }
+  .sub { color: var(--muted); }
+  .stamp { margin-left: auto; font-family: var(--f-mono); font-size: 11px;
+           color: var(--faint); }
+
+  .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px; margin-top: 16px; align-items: start; }
+  .cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+           gap: 16px; margin-top: 16px; align-items: start; }
+
+  .panel { background: var(--panel); border: 1px solid var(--rule);
+           border-radius: 3px; overflow: hidden; }
+  .panel h2 {
+    font-family: var(--f-disp); font-weight: 700; font-size: 14px;
+    letter-spacing: .1em; text-transform: uppercase; margin: 0;
+    padding: 8px 11px; border-bottom: 2px solid var(--rule-hi);
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px;
+  }
+  .panel h2 small { font-family: var(--f-mono); font-weight: 500; font-size: 10px;
+                    letter-spacing: 0; text-transform: none; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { font-family: var(--f-disp); font-weight: 600; font-size: 10.5px;
+       letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
+       text-align: left; padding: 6px 8px 4px; border-bottom: 1px solid var(--rule); }
+  th.a { color: var(--air); } th.h { color: var(--heli); }
+  td { padding: 3px 8px; vertical-align: top; border-top: 1px solid var(--rule); }
+  tr:first-child td { border-top: none; }
+  td.n { font-family: var(--f-mono); font-weight: 600; font-size: 11.5px;
+         font-variant-numeric: tabular-nums; text-align: right;
+         white-space: nowrap; width: 1%; }
+  td.c { font-weight: 600; white-space: nowrap; }
+  td.c em { font-style: normal; color: var(--faint); font-weight: 400; }
+  td.h { color: var(--muted); }
+  td.none { color: var(--faint); }
+
+  .note { padding: 9px 11px; color: var(--muted); }
+  .note b { color: var(--ink); }
+  .note ul { margin: 0; padding-left: 1.05em; display: flex;
+             flex-direction: column; gap: 5px; }
+  .note li::marker { color: var(--faint); }
+  code { font-family: var(--f-mono); font-size: 11.5px; background: var(--sunk);
+         border-radius: 2px; padding: 1px 4px; }
+
+  @media (max-width: 900px) {
+    .cols, .cols3 { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media print {
+    body { background: #fff; font-size: 9px; }
+    .sheet { max-width: none; padding: 0; }
+    .panel { break-inside: avoid; }
+  }
+</style>
+
+<div class="sheet">
+  <header>
+    <h1>Kneeboard</h1>
+    <span class="sub">FA-18C &middot; VIRPIL</span>
+    <span class="stamp">generated 2026-09-12 · 51 bindings</span>
+  </header>
+
+  <div class="cols">
+    <div class="panel"><h2>R-VPC Stick WarBRD-D<small>DCS button numbers</small></h2><table><tr><th>Control</th><th>BTN</th><th class="a">Command</th></tr><tr><td class="c">Main trigger <em>second</em></td><td class="n">4</td><td>Gun Trigger - SECOND DETENT (Press to shoot)</td></tr><tr><td class="c">Mini-stick <em>push</em></td><td class="n">6</td><td>Exterior Lights Switch - OFF</td></tr><tr><td class="c">Thumb top button</td><td class="n">7</td><td>Weapon Release Button</td></tr><tr><td class="c">Top thumb hat <em>push</em></td><td class="n">8</td><td>Exterior Lights Switch - ON</td></tr><tr><td class="c">Top thumb hat <em>up</em></td><td class="n">9</td><td>Trimmer Switch - PUSH(DESCEND)</td></tr><tr><td class="c">Top thumb hat <em>left</em></td><td class="n">10</td><td>Trimmer Switch - LEFT WING DOWN</td></tr><tr><td class="c">Top thumb hat <em>down</em></td><td class="n">11</td><td>Trimmer Switch - PULL(CLIMB)</td></tr><tr><td class="c">Top thumb hat <em>right</em></td><td class="n">12</td><td>Trimmer Switch - RIGHT WING DOWN</td></tr><tr><td class="c">Bottom thumb hat <em>up</em></td><td class="n">15</td><td>Select Gun</td></tr><tr><td class="c">Bottom thumb hat <em>left</em></td><td class="n">16</td><td>Select AMRAAM</td></tr><tr><td class="c">Bottom thumb hat <em>down</em></td><td class="n">17</td><td>Select Sidewinder</td></tr><tr><td class="c">Bottom thumb hat <em>right</em></td><td class="n">18</td><td>Select Sparrow</td></tr><tr><td class="c">Grip thumb hat <em>push</em></td><td class="n">23</td><td>Sensor Control Switch - Depress</td></tr><tr><td class="c">Grip thumb hat <em>up</em></td><td class="n">24</td><td>Sensor Control Switch - Fwd</td></tr><tr><td class="c">Grip thumb hat <em>left</em></td><td class="n">25</td><td>Sensor Control Switch - Left</td></tr><tr><td class="c">Grip thumb hat <em>down</em></td><td class="n">26</td><td>Sensor Control Switch - Aft</td></tr><tr><td class="c">Grip thumb hat <em>right</em></td><td class="n">27</td><td>Autopilot/Nosewheel Steering Disengage (Paddle) Switch</td></tr><tr><td class="c">Grip pinky button</td><td class="n">31</td><td>RECCE Event Mark Switch</td></tr></table></div>
+    <div class="panel"><h2>L-VPC VMAX Prime Throttle<small>DCS button numbers</small></h2><table><tr><th>Control</th><th>BTN</th><th class="a">Command</th></tr><tr><td class="c">Pinky button</td><td class="n">1</td><td>Cage/Uncage Button</td></tr><tr><td class="c">Left side dial <em>push</em></td><td class="n">2</td><td>COMM Switch - MIDS B</td></tr><tr><td class="c">Middle finger button</td><td class="n">3</td><td>Wheel Brake - ON/OFF</td></tr><tr><td class="c">Middle finger hat <em>up</em></td><td class="n">5</td><td>FLAP Switch - HALF</td></tr><tr><td class="c">Middle finger hat <em>down</em></td><td class="n">7</td><td>FLAP Switch - FULL</td></tr><tr><td class="c">Thumb two-way hat <em>push</em></td><td class="n">10</td><td>RAID/FLIR FOV Select Button</td></tr><tr><td class="c">Thumb two-way hat <em>forward</em></td><td class="n">11</td><td>Speed Brake Switch - EXTEND</td></tr><tr><td class="c">Thumb two-way hat <em>back</em></td><td class="n">13</td><td>Speed Brake Switch - RETRACT</td></tr><tr><td class="c">Thumb mini-stick <em>push</em></td><td class="n">15</td><td>Throttle Designator Controller - Depress</td></tr><tr><td class="c">Thumb button</td><td class="n">16</td><td>ATC Engage/Disengage Switch</td></tr><tr><td class="c">Bottom thumb button</td><td class="n">17</td><td>Arresting Hook Handle - Up</td></tr><tr><td class="c">Keyboard B1 button</td><td class="n">23</td><td>Master Mode Button - A/A</td></tr><tr><td class="c">Keyboard B2 button</td><td class="n">24</td><td>Master Mode Button - A/G</td></tr><tr><td class="c">Keyboard B3 button</td><td class="n">25</td><td>COMM Switch - COMM 1 (call radio menu)</td></tr><tr><td class="c">Keyboard B4 button</td><td class="n">26</td><td>COMM Switch - COMM 2 (call radio menu)</td></tr><tr><td class="c">Keyboard B5 button</td><td class="n">27</td><td>Launch Bar Control Switch - EXTEND</td></tr><tr><td class="c">Keyboard B6 button</td><td class="n">28</td><td>Launch Bar Control Switch - RETRACT</td></tr><tr><td class="c">Big red button</td><td class="n">29</td><td>MASTER CAUTION Reset Button</td></tr><tr><td class="c">T5 rocker <em>up</em></td><td class="n">38</td><td>Landing Gear Control Handle - DOWN</td></tr><tr><td class="c">T5 rocker <em>down</em></td><td class="n">39</td><td>Landing Gear Control Handle - UP</td></tr><tr><td class="c">APU button</td><td class="n">40</td><td>COMM Switch - MIDS A</td></tr><tr><td class="c">E1 encoder <em>push</em></td><td class="n">41</td><td>Throttle (Left) - OFF(hold)&lt;&gt;IDLE</td></tr><tr><td class="c">E2 encoder <em>push</em></td><td class="n">44</td><td>Throttle (Right) - OFF(hold)&lt;&gt;IDLE</td></tr></table></div>
+  </div>
+
+  <div class="cols3">
+    <div class="panel"><h2>Axes</h2><table><tr><th>Control</th><th>#</th><th class="a">Command</th></tr><tr><td class="c">Main stick, left/right</td><td class="n">sti 0</td><td>Roll</td></tr><tr><td class="c">Main stick, fore/aft</td><td class="n">sti 1</td><td>Pitch (inverted)</td></tr><tr><td class="c">Stick twist</td><td class="n">sti 2</td><td>Rudder</td></tr><tr><td class="c">Analogue lever on the grip</td><td class="n">sti 5</td><td>Wheel Brake</td></tr><tr><td class="c">Thumb mini-stick</td><td class="n">thr 0</td><td>Throttle Designator Controller - Horizontal Axis</td></tr><tr><td class="c">Thumb mini-stick</td><td class="n">thr 1</td><td>Throttle Designator Controller - Vertical Axis</td></tr><tr><td class="c">Left throttle lever</td><td class="n">thr 2</td><td>Thrust</td></tr><tr><td class="c">Left throttle lever</td><td class="n">thr 2</td><td>Thrust Left (inverted)</td></tr><tr><td class="c">Right throttle lever</td><td class="n">thr 3</td><td>Thrust Right (inverted)</td></tr><tr><td class="c">Right side dial</td><td class="n">thr 6</td><td>Zoom View</td></tr></table></div>
+    <div class="panel"><h2>Still unbound<small>most-wanted first</small></h2><table><tr><th>Command</th><th>Profiles</th><th>Kind</th></tr><tr><td class="c">Undesignate/Nose Wheel Steer Switch</td><td class="n">11</td><td class="h">button</td></tr><tr><td class="c">Sensor Control Switch - Right</td><td class="n">10</td><td class="h">button</td></tr><tr><td class="c">Dispense Switch - Aft(FLARE)/Center(OFF)</td><td class="n">8</td><td class="h">button</td></tr><tr><td class="c">Arresting Hook Handle - Down</td><td class="n">7</td><td class="h">button</td></tr><tr><td class="c">Dispense Switch - Forward(CHAFF)/Center(OFF)</td><td class="n">7</td><td class="h">button</td></tr><tr><td class="c">Radar Elevation Control</td><td class="n">6</td><td class="h">axis</td></tr><tr><td class="c">Emergency Jettison Button</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">HMD OFF/BRT Knob</td><td class="n">5</td><td class="h">axis</td></tr><tr><td class="c">UFC COMM 1 Channel Selector Knob - CCW/Decrease</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">UFC COMM 1 Channel Selector Knob - CW/Increase</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">UFC COMM 1 Channel Selector Knob - PULL</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">UFC COMM 2 Channel Selector Knob - CCW/Decrease</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">UFC COMM 2 Channel Selector Knob - CW/Increase</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">UFC COMM 2 Channel Selector Knob - PULL</td><td class="n">5</td><td class="h">button</td></tr><tr><td class="c">FLAP Switch - AUTO</td><td class="n">4</td><td class="h">button</td></tr><tr><td class="c">FLAP Switch - Up</td><td class="n">4</td><td class="h">button</td></tr><tr><td class="c">Landing Gear Control Handle - UP/DOWN</td><td class="n">4</td><td class="h">button</td></tr><tr><td class="c">Master Arm Switch - ARM</td><td class="n">4</td><td class="h">button</td></tr></table></div>
+    <div class="panel">
+      <h2>Reading this</h2>
+      <div class="note">
+        <ul>
+          <li><b>?</b> means proposed from the hardware map and not yet
+              confirmed — press a button over it in the wizard to make it
+              yours.</li>
+          <li><b>BTN numbers are DCS's</b>, one higher than the OS number the
+              device map uses.</li>
+          <li>Generated by <code>./propose.py --html</code>. Regenerate rather
+              than editing.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>

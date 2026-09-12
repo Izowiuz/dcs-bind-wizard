@@ -49,6 +49,40 @@ capture-driven TUI, pointed at DCS.
 - refuses to write while DCS is running (the game overwrites those files
   on exit) and backs up existing files as `*.bak`
 
+## Flow
+
+```bash
+./dcs-bind-wizard.py            # pick an aircraft, then "Essential binds"
+```
+
+Inside the table:
+
+| key | what it does |
+|---|---|
+| `P` | seed every unbound row from the hardware map |
+| `c` | confirm the selected proposal — drops the `?`, moves on |
+| `C` | confirm every proposal in this section |
+| RETURN | capture: press a button to overrule a proposal |
+| `I` / `X` | invert an axis · clear a binding |
+
+Then "Generate diff.lua files". Afterwards:
+
+```bash
+./propose.py -a FA-18C --sheet --html   # KNEEBOARD-FA-18C.md + the columns page
+./propose.py -a FA-18C --why            # why each control was chosen
+./propose.py -a FA-18C --check          # the proposal against what you bound
+```
+
+`P` needs [`sim-device-map`](../sim-device-map) cloned next to this repo, or
+`SIM_DEVICE_MAP` pointing at it. It is the only thing that knows a hat is a
+hat: the module says a command wants "the hat on TOP of the grip", the map says
+which four buttons that is, and `propose.py` joins them. Everything else --
+which commands matter, which way a switch goes, which device the factory
+profiles use -- this repo already worked out on its own.
+
+Confirming is a decision, not a capture. `c` exists because pressing the button
+again just to agree with the proposal would defeat the point of having one.
+
 ## Usage
 
 ```bash
