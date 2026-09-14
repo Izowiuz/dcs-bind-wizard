@@ -81,6 +81,9 @@ def wants(cmd, g):
     """(shape, device or None, must be reachable in flight)."""
     place = (g.get('place') or '').lower()
     ways = cmd.get('ways') or 0
+    if LATCH_COMMANDS.search(cmd['name']):
+        # the lever is on the grip, so nothing about reach can disqualify it
+        return 'latch', 'stick', 0
     shape = None
     for pattern, s in SHAPES:
         if re.search(pattern, place):
@@ -152,8 +155,13 @@ def families(cmds, guide, chosen):
         # were classified as. Left and right engine cutoff are a pair: split
         # across two devices they are worse than anywhere together, because
         # your hand has to learn two places for one idea.
-        if fam and (c.get('ways') or 0) > 1 and shape in ('hat4', 'hat2',
-                                                          'button'):
+        # `ways` counts a switch's sibling positions, and the Hornet reports 0
+        # for master arm, so the usual test would leave the pair as two
+        # unrelated singles -- and they would then land on the lever in
+        # whatever order scoring happened to visit them. LATCH_COMMANDS already
+        # admits exactly one pair, so the count adds nothing there.
+        together = shape == 'latch' or (c.get('ways') or 0) > 1
+        if fam and together and shape in ('hat4', 'hat2', 'button', 'latch'):
             key = (fam, shape)
             groups.setdefault(key, {'shape': shape, 'dev': dev,
                                     'urgency': urgency, 'members': [],
@@ -163,6 +171,16 @@ def families(cmds, guide, chosen):
             g['votes'] = max(g['votes'], c['votes'])
         else:
             singles.append((h, shape, dev, urgency, c['votes']))
+    for g in groups.values():
+        if g['shape'] == 'latch':
+            # lay_out() zips leftovers onto bindable_buttons in order, and the
+            # latch reports its contacts closed-first. Putting SAFE first lands
+            # it on the same physical contact that carries SimSafeMasterArm in
+            # Falcon BMS, so one check on the ramp settles both sims -- and if
+            # it turns out backwards, both swap together.
+            g['members'].sort(key=lambda h: 0 if re.search(
+                r'safe$', cmds[h]['name'], re.I) else 1)
+
     def label_for(fam, members):
         """`switch_family` strips the direction words, which sometimes leaves
         nothing useful: the engine cutoff pair comes out called "throttle".
@@ -217,10 +235,15 @@ MOVE_TO_DIR = [
 #: Starting a cold aircraft needs controls no factory profile bothers to bind,
 #: because a profile is written for a jet that is already running. They sit
 #: below the vote floor and would never reach the essentials on their own.
+#: Commands worth placing that no factory profile votes for, so the ranking
+#: never surfaces them. Cold-start switches, because a profile author assumes
+#: you start hot -- and master arm, because it is a cockpit switch in every
+#: profile and a HOTAS switch on this hardware.
 COLD_START = [
     r'throttle \((left|right)\).*off\(hold\)',
     r'engine crank switch - (left|right)$',
     r'apu control sw',
+    r'master arm switch - (arm|safe)$',
 ]
 
 
@@ -346,6 +369,18 @@ MAX_REACH = {0: 1, 1: 3, 2: 1, 3: 3}
 MIN_REACH = {0: 0, 1: 0, 2: 0, 3: 2}
 
 
+#: A two-position switch that HOLDS its position deserves a control that also
+#: holds one, and this hardware has exactly one: the lever over the trigger.
+#: Master arm is the command it was made for -- the guard position becomes the
+#: switch position, so you can read the aircraft's state off your own hand
+#: without looking into the cockpit.
+#:
+#: Deliberately narrow. Every other two-position command in a module is happy
+#: on a sprung hat, and the trigger lever is the most valuable real estate on
+#: the stick; it should not go to the first switch family that asks.
+LATCH_COMMANDS = re.compile(r'master arm switch - (arm|safe)$', re.I)
+
+
 #: When the module says a command sits ON THE GRIP, the aircraft's own
 #: designers already answered this question -- your hand is there anyway. That
 #: beats the theme, which only says when you touch it.
@@ -374,6 +409,7 @@ FITS = {
     'trigger': ('trigger',),
     'ministick': ('ministick',),
     'dial': ('dial', 'encoder'),
+    'latch': ('latch',),
 }
 
 
@@ -929,6 +965,15 @@ def main():
                             'on the ramp'][need['urgency']]}"
                   + f'   {need["votes"]} factory profiles   score {s}')
             print(f'      {guide[need["members"][0]]["place"][:74]}')
+            if need['shape'] == 'latch':
+                # the line above is the module's own advice, and we just went
+                # against it on purpose; say so rather than leave it looking
+                # like the proposal missed it
+                print('      OVERRIDDEN: the module is right that this is a '
+                      'panel switch, but the')
+                print('      trigger lever holds its position the way the real '
+                      'one does, so the')
+                print('      guard position IS the switch position.')
         print()
 
     if unplaced:
